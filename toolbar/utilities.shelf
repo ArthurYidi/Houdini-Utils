@@ -1,0 +1,142 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<shelfDocument>
+  <!-- This file contains definitions of shelves, toolbars, and tools.
+ It should not be hand-edited when it is being used by the application.
+ Note, that two definitions of the same element are not allowed in
+ a single file. -->
+  <tool name="util_subdiv" label="Toggle Subdivision" icon="SOP_subdivide">
+    <script scriptType="python"><![CDATA[import hou
+import toolutils
+
+def findSOPRoot(node, result):
+    # TODO use node type instead
+    if node:
+        category = node.childTypeCategory()
+        if category and category.name() == "Sop":
+            result.append(node)
+        findSOPRoot(node.parent(), result)
+
+def getSOPRoot(node):
+    result = []
+    findSOPRoot(node, result)
+    if result:
+        return result[-1]
+    return result
+
+def main():
+    selectedNode = None
+    selectedNodes = hou.selectedNodes()
+    if selectedNodes:
+        selectedNode = selectedNodes[-1]
+    else:
+        scene = toolutils.sceneViewer()
+        selectedNode = scene.pwd()
+
+    if not hasattr(hou.session, 'lastDisplayNode'):
+        hou.session.lastDisplayNode = {}
+
+    rootNode = getSOPRoot(selectedNode)
+
+    if rootNode:
+        displayNode = rootNode.displayNode()
+        #print('\n'.join(dir(displayNode)))
+
+        # toogle display
+
+        if displayNode and displayNode.type() == hou.nodeType('Sop/subdivide'):
+            # TODO better way to find subd node
+            if rootNode in hou.session.lastDisplayNode:
+                hou.session.lastDisplayNode[rootNode].setDisplayFlag(True)
+                hou.session.lastDisplayNode[rootNode].setRenderFlag(True)
+        else:
+            subdNode = rootNode.glob('subd*')
+            if subdNode:
+                hou.session.lastDisplayNode[rootNode] = displayNode
+                subdNode[0].setDisplayFlag(True)
+                subdNode[0].setRenderFlag(True)
+main()]]></script>
+  </tool>
+
+  <tool name="util_layoutnodes" label="Layout Nodes" icon="$HFS/toolkit/samples/SOP/SOP_hdk_star.svg">
+    <script scriptType="python"><![CDATA[import toolutils
+import hou
+import pygraphviz
+
+# Based on: www.sidefx.com/masterclasses/2007/hom_class.odp
+
+# TODO: move according to topmost left
+
+# OBJ-Level
+# Grid organize in a grid according to lights, geo, cam, etc.
+# TODO: layout only a tree (selection) from a forrest
+# TODO: detect cross over edges and increase the height for the level
+# TODO: locking user node positions 
+
+def layout(network, scale=1.0):
+    if not network.children():
+        return
+
+    isVop = isinstance(network.children()[0], hou.VopNode)
+    graph = pygraphviz.AGraph(directed=True)
+    graph.graph_attr['ordering'] = 'in'
+    scale_x = scale * 0.02
+    scale_y = scale * 0.012
+    if isVop:
+        graph.graph_attr['rankdir'] = 'LR'
+        scale_y = scale * 0.018
+
+    # Add graph nodes for each Houdini node in the network.
+    gv_nodes, nodes = {}, {}
+    count = 0
+    for node in network.children():
+        count += 1
+        graph.add_node('v' + str(count))
+        gv_node = graph.nodes()[-1]
+        size = node.size()
+        gv_node.attr['width'] = str(size[0])
+        gv_node.attr['height'] = str(size[1])
+        gv_node.attr['fixedsize'] = 'true'
+        gv_node.attr['label'] = ''
+        gv_nodes[node] = gv_node
+        nodes[gv_node] = node
+
+    # Now add graph edges for all the wires in the network
+    for node in network.children():
+        for input_node in node.inputs():
+            # Bug: inputs should not return None in VOPs
+            if input_node is None:
+                continue
+            graph.add_edge(gv_nodes[input_node], gv_nodes[node])
+            edge = graph.edges()[-1]
+            edge.attr['headport'] = 'n'
+            edge.attr['tailport'] = 's'
+
+    # Layout the graph and set the Houdini node positions
+    graph.layout(prog='dot')
+    for gv_node in graph.nodes():
+        pos = [float(v) for v in gv_node.attr['pos'].split(',')]
+        pos[0] *= scale_x
+        pos[1] *= scale_y
+        nodes[gv_node].setPosition(pos)
+
+# Find Root Node
+
+root_node = None
+selected_nodes = hou.selectedNodes()
+network_editor = hou.ui.curDesktop().paneTabOfType(hou.paneTabType.NetworkEditor)
+
+if selected_nodes:
+    root_node = selected_nodes[-1].parent()
+elif network_editor:
+    root_node = network_editor.pwd()
+    network_editor.setIsCurrentTab()
+
+if root_node:
+    layout(root_node)]]></script>
+  </tool>
+
+  <toolshelf name="util" label="Utilities">
+    <memberTool name="util_layoutnodes"/>
+    <memberTool name="util_subdiv"/>
+  </toolshelf>
+</shelfDocument>
