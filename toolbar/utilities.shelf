@@ -4,9 +4,14 @@
  It should not be hand-edited when it is being used by the application.
  Note, that two definitions of the same element are not allowed in
  a single file. -->
+
   <tool name="util_subdiv" label="Toggle Subdivision" icon="SOP_subdivide">
     <script scriptType="python"><![CDATA[import hou
 import toolutils
+
+# TODO: get last subd
+# TODO: properly fix the code
+# TODO: properly display/render flags
 
 def findSOPRoot(node, result):
     # TODO use node type instead
@@ -58,81 +63,206 @@ main()]]></script>
   </tool>
 
   <tool name="util_layoutnodes" label="Layout Nodes" icon="$HFS/toolkit/samples/SOP/SOP_hdk_star.svg">
-    <script scriptType="python"><![CDATA[import toolutils
+    <script scriptType="python"><![CDATA[# Based on: www.sidefx.com/masterclasses/2007/hom_class.odp
+
+import toolutils
 import hou
 import pygraphviz
 
-# Based on: www.sidefx.com/masterclasses/2007/hom_class.odp
+# Houdini Bugs 13/14
+# Bug1: inputs should not return None in VOPs
+# Bug2: Size should return the current node size (not fully expanded)
+#       - origin position in surface model VOP is incorrect it's off by (0,-11.004)
+#       - same as above: hairmodel
+#       - seems to be caused by nodes with more...
+# Bug3: no way to edit position of subnetworks inputs (indirect)
+# Bug4: rop nodes have wrong size and origin (-0.215296, 0.235801) height 0.753
 
-# TODO: move according to topmost left
+# TODO: don't include nodes that are not visible in network (node.isHidden())
+# TODO: sort roots by type
+# TODO: order of input is important add nodes by input conn order!
+# TODO: is number of inputs is big increase rank length
+# TODO: center records for non VOPs!
+# TODO: only act on selection when pressed with shift
+# TODO: add clustering
+# TODO: convert to network menu
+# TODO: set boxing box to center
+# TODO: layout only a sub-graph in a forrest
+# TODO: locking user node positions
 
 # OBJ-Level
-# Grid organize in a grid according to lights, geo, cam, etc.
-# TODO: layout only a tree (selection) from a forrest
-# TODO: detect cross over edges and increase the height for the level
-# TODO: locking user node positions 
+# TODO: Grid layout according to lights, geo, cam, etc.
 
-def layout(network, scale=1.0):
+def layout(network, keep_order=True):
+    """
+    Layout nodes using GraphViz (dot)
+
+    Includes support for VOPs.
+    """
+    dpi = 72
+    scale = 1.0/dpi
+
     if not network.children():
         return
 
     isVop = isinstance(network.children()[0], hou.VopNode)
     graph = pygraphviz.AGraph(directed=True)
-    graph.graph_attr['ordering'] = 'in'
-    scale_x = scale * 0.02
-    scale_y = scale * 0.012
+    #graph.graph_attr['ordering'] = 'out'
+    graph.graph_attr['fixedsize'] = 'true'
+    graph.graph_attr['nodesep'] = '0.6'
+    graph.graph_attr['ranksep'] = '0.2'
     if isVop:
+        keep_order = True
         graph.graph_attr['rankdir'] = 'LR'
-        scale_y = scale * 0.018
+        graph.graph_attr['ranksep'] = '1.3'
 
     # Add graph nodes for each Houdini node in the network.
-    gv_nodes, nodes = {}, {}
+    gv_nodes = {}
+    nodes = {}
     count = 0
     for node in network.children():
+        if node.isHidden():
+            continue
+
         count += 1
-        graph.add_node('v' + str(count))
-        gv_node = graph.nodes()[-1]
         size = node.size()
+        inputs = []
+        outputs = []
+        connectors = []
+        in_indices = set()
+        out_indices = set()
+
+        # Bug 4
+        if isinstance(node, hou.RopNode):
+            size[1] = 0.753
+
+        for out in node.outputConnections():
+            out_indices.add(out.outputIndex())
+        for inc in node.inputConnections():
+            in_indices.add(inc.inputIndex())
+
+        in_indices = sorted(in_indices)
+        out_indices = sorted(out_indices)
+
+        for inc in in_indices:
+            inputs.append('<i{0}> '.format(inc))
+        for out in out_indices:
+            outputs.append('<o{0}> '.format(out))
+        
+        num_inputs = len(in_indices)
+        num_outputs = len(out_indices)
+        num_rows = max(num_inputs, num_outputs)
+
+        for row in range(num_rows):
+            input = output = '<empty> '
+            if row < num_inputs:
+                input = inputs[row]
+            if row < num_outputs:
+                output = outputs[row]
+            row = '{' + input + '|' + output + '}'
+            connectors.append(row)
+
+        label = '|'.join(connectors)
+
+        graph.add_node('v' + str(count))
+        
+        gv_node = graph.nodes()[-1]
         gv_node.attr['width'] = str(size[0])
         gv_node.attr['height'] = str(size[1])
         gv_node.attr['fixedsize'] = 'true'
-        gv_node.attr['label'] = ''
+        gv_node.attr['shape'] = 'record'
+        gv_node.attr['label'] = label
+        
+        if not keep_order or (num_inputs < 2 and num_outputs < 2):
+            gv_node.attr['shape'] = 'box' 
+            gv_node.attr['label'] =  ''
+        
         gv_nodes[node] = gv_node
         nodes[gv_node] = node
 
     # Now add graph edges for all the wires in the network
+    or_in = 'n'
+    or_out = 's'
+    
+    if isVop:
+        or_in = 'w'
+        or_out = 'e'
+
     for node in network.children():
-        for input_node in node.inputs():
-            # Bug: inputs should not return None in VOPs
-            if input_node is None:
+        for conn in node.inputConnections():
+            n_in = conn.inputNode()
+            n_out = node
+
+            # sub-netowrk inputs and hidden
+            if not n_in in gv_nodes:
                 continue
-            graph.add_edge(gv_nodes[input_node], gv_nodes[node])
-            edge = graph.edges()[-1]
-            edge.attr['headport'] = 'n'
-            edge.attr['tailport'] = 's'
+
+            i_in = or_in
+            i_out = or_out
+            
+            if keep_order:
+                if len(n_out.inputConnections()) > 1:
+                    i_in = 'i{0}:{1}'.format(conn.inputIndex(), or_in)
+                if len(n_in.inputConnections()) > 1:
+                    i_out = 'o{0}:{1}'.format(conn.outputIndex(), or_out)
+
+            graph.add_edge(gv_nodes[n_in],
+                           gv_nodes[n_out],
+                           headport=i_in,
+                           tailport=i_out)
 
     # Layout the graph and set the Houdini node positions
     graph.layout(prog='dot')
-    for gv_node in graph.nodes():
-        pos = [float(v) for v in gv_node.attr['pos'].split(',')]
-        pos[0] *= scale_x
-        pos[1] *= scale_y
-        nodes[gv_node].setPosition(pos)
+    #graph.draw('/Users/ayidi/Desktop/test.dot')
+    #graph.draw('/Users/ayidi/Desktop/test.png') 
 
-# Find Root Node
+    for gv_node in graph.nodes():
+        # convert center coord to bottom left
+        width = float(gv_node.attr['width']) * dpi
+        height = float(gv_node.attr['height']) * dpi
+        pos = [float(v) for v in gv_node.attr['pos'].split(',')]
+        pos[0] -= width/2
+        pos[1] -= height/2
+        pos[0] *= scale
+        pos[1] *= scale
+        
+        # Bug2 and Bug4
+        node = nodes[str(gv_node).split(':')[0]]
+        if isVop:
+            if node.type().name() == 'surfacemodel':
+                pos[1] -= 11.004
+        else:
+            if isinstance(node, hou.RopNode):
+                pos[0] -= 0.215296
+                pos[1] += 0.235801
+                # align right
+                pos[0] += width * scale
+        node.setPosition(pos)
+
+def activeNetworkPanes():
+    desktop = hou.ui.curDesktop()
+    panes = desktop.paneTabs()
+    network_panes = []
+    
+    for pane in panes:
+        if pane.isCurrentTab():
+            if isinstance(pane, hou.NetworkEditor):
+                network_panes.append(pane)
+
+    return network_panes
 
 root_node = None
 selected_nodes = hou.selectedNodes()
-network_editor = hou.ui.curDesktop().paneTabOfType(hou.paneTabType.NetworkEditor)
+network_editors = activeNetworkPanes()
 
-if selected_nodes:
+if selected_nodes and network_editors:
     root_node = selected_nodes[-1].parent()
-elif network_editor:
-    root_node = network_editor.pwd()
-    network_editor.setIsCurrentTab()
+elif network_editors:
+    root_node = network_editors[0].pwd()
 
 if root_node:
-    layout(root_node)]]></script>
+    layout(root_node)
+]]></script>
   </tool>
 
   <toolshelf name="util" label="Utilities">
