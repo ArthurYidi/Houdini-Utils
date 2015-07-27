@@ -72,13 +72,14 @@ import pygraphviz
 # Houdini Bugs 13/14
 # Bug1: inputs should not return None in VOPs
 # Bug2: Size should return the current node size (not fully expanded)
-#       - origin position in surface model VOP is incorrect it's off by (0,-11.004)
-#       - same as above: hairmodel
+#       - origin position in surface model, hair model VOP is incorrect it's off by (0,-11.004)
 #       - seems to be caused by nodes with more...
 # Bug3: no way to edit position of subnetworks inputs (indirect)
 # Bug4: rop nodes have wrong size and origin (-0.215296, 0.235801) height 0.753
 
-# TODO: don't include nodes that are not visible in network (node.isHidden())
+# TODO: store user node positions
+# x TODO: don't include nodes that are not visible in network (node.isHidden())
+
 # TODO: sort roots by type
 # TODO: order of input is important add nodes by input conn order!
 # TODO: is number of inputs is big increase rank length
@@ -88,7 +89,6 @@ import pygraphviz
 # TODO: convert to network menu
 # TODO: set boxing box to center
 # TODO: layout only a sub-graph in a forrest
-# TODO: locking user node positions
 
 # OBJ-Level
 # TODO: Grid layout according to lights, geo, cam, etc.
